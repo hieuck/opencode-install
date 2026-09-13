@@ -1,11 +1,13 @@
 ﻿<#
 .SYNOPSIS
     Kịch bản tự động gỡ sạch, cài đặt mới OpenCode và tích hợp toàn bộ Plugin / MCP:
-    - OpenCode CLI
+    - OpenCode CLI (pin major v1 để tương thích opencode-goal-plugin)
     - Superpowers (obra/superpowers)
-    - ECC (affaan-m/ECC - profile developer)
+    - ECC (affaan-m/ECC - profile developer, giữ hook runtime)
     - CodeGraph (colbymchenry/codegraph)
     - Andrej Karpathy Skills (multica-ai/andrej-karpathy-skills)
+    - opencode-goal-plugin (kèm slash command /goal)
+    - 9Remote notify plugin (plugin/nineRemoteNotify.js)
 
 .PARAMETER SkipUninstall
     Bỏ qua bước gỡ cài đặt, chỉ cập nhật và thiết lập lại plugin/cấu hình.
@@ -114,11 +116,18 @@ if (-not $SkipUninstall) {
 # -----------------------------------------------------------
 Write-Step "3. Cài đặt mới OpenCode CLI và các công cụ bổ trợ"
 
-Write-Info "Cài đặt opencode-ai toàn cục qua npm..."
-& npm install -g --allow-scripts=opencode-ai opencode-ai
+Write-Info "Cài đặt opencode-ai toàn cục qua npm (pin major v1: opencode-goal-plugin chỉ hỗ trợ opencode >=1.17.15 <2)..."
+& npm install -g --allow-scripts=opencode-ai opencode-ai@1
 
-Write-Info "Đảm bảo @colbymchenry/codegraph và ecc-universal đã sẵn sàng..."
-& npm install -g @colbymchenry/codegraph ecc-universal
+# Ưu tiên CodeGraph CLI standalone nếu đã có, tránh cài trùng 2 bản (standalone + npm) gây lệch version.
+if (Get-Command codegraph -ErrorAction SilentlyContinue) {
+    Write-Success "CodeGraph CLI đã có sẵn, bỏ qua cài npm để tránh trùng bản."
+} else {
+    Write-Info "Chưa có CodeGraph CLI, cài qua npm..."
+    & npm install -g @colbymchenry/codegraph
+}
+Write-Info "Đảm bảo ecc-universal đã sẵn sàng..."
+& npm install -g ecc-universal
 
 $configDir = "$env:USERPROFILE\.config\opencode"
 if (-not (Test-Path $configDir)) {
@@ -141,8 +150,9 @@ Write-Success "CodeGraph MCP đã được cấu hình cho OpenCode."
 # -----------------------------------------------------------
 Write-Step "5. Cài đặt ECC - Everything Claude Code (affaan-m/ECC)"
 
-& ecc install --profile developer --target opencode --no-hooks
-Write-Success "ECC Developer Profile đã được cài đặt vào OpenCode."
+# Giữ hook runtime của ECC (plugins/ecc-hooks.ts): setup chuẩn có file này, --no-hooks sẽ làm fresh-install lệch với máy đang chạy.
+& ecc install --profile developer --target opencode --enable-hooks
+Write-Success "ECC Developer Profile (kèm hooks) đã được cài đặt vào OpenCode."
 
 # -----------------------------------------------------------
 # 5. CÀI ĐẶT SUPERPOWERS PLUGIN
@@ -151,13 +161,30 @@ Write-Step "6. Cài đặt Superpowers (obra/superpowers)"
 
 & opencode plugin superpowers@git+https://github.com/obra/superpowers.git -g
 
-# Cài đặt dự phòng trong node_modules và đồng bộ skills
+# Cài đặt dự phòng trong node_modules và đồng bộ skills còn thiếu.
+# CHỈ copy skill chưa tồn tại: cả 14 skill superpowers đều trùng tên với skill đã có,
+# copy -Force mù quáng sẽ ghi đè (mất custom/ECC) mỗi lần chạy lại.
 Push-Location $configDir
 try {
     & npm install superpowers@git+https://github.com/obra/superpowers.git --silent
-    if (Test-Path "$configDir\node_modules\superpowers\skills") {
-        Copy-Item -Path "$configDir\node_modules\superpowers\skills\*" -Destination "$configDir\skills\" -Recurse -Force
-        Write-Success "Đã đồng bộ bộ kỹ năng của Superpowers vào $configDir\skills."
+    $spSkills = "$configDir\node_modules\superpowers\skills"
+    $destSkills = "$configDir\skills"
+    if (Test-Path $spSkills) {
+        if (-not (Test-Path $destSkills)) {
+            New-Item -ItemType Directory -Path $destSkills -Force | Out-Null
+        }
+        $skipped = @()
+        $copied = @()
+        Get-ChildItem $spSkills -Directory | ForEach-Object {
+            $dest = Join-Path $destSkills $_.Name
+            if (Test-Path $dest) { $skipped += $_.Name }
+            else {
+                Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force
+                $copied += $_.Name
+            }
+        }
+        if ($copied.Count -gt 0) { Write-Success "Đã thêm skill mới của Superpowers: $($copied -join ', ')." }
+        if ($skipped.Count -gt 0) { Write-Info "Giữ nguyên skill đã tồn tại (không ghi đè): $($skipped -join ', ')." }
     }
 } finally {
     Pop-Location
@@ -249,26 +276,103 @@ if (-not (Test-Path $karpathySkillDir)) {
 Write-Success "Đã tạo kỹ năng và chỉ dẫn Andrej Karpathy trong $configDir."
 
 # -----------------------------------------------------------
-# 7. CHUẨN HÓA VÀ TỐI ƯU TỆP OPENCODE.JSON
+# 6b. KHÔI PHỤC GOAL PLUGIN & 9REMOTE NOTIFY (bước wipe đã xóa)
 # -----------------------------------------------------------
-Write-Step "8. Chuẩn hóa tệp cấu hình opencode.json"
+Write-Step "8. Khôi phục opencode-goal-plugin và 9Remote notify plugin"
+
+Push-Location $configDir
+try {
+    # 1. Đảm bảo package.json có opencode-goal-plugin (pin version theo README của plugin)
+    if (-not (Test-Path "$configDir\package.json")) {
+        '{ "dependencies": {} }' | Set-Content "$configDir\package.json" -Encoding UTF8
+    }
+    $pkg = Get-Content "$configDir\package.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $pkg.dependencies) {
+        $pkg | Add-Member -MemberType NoteProperty -Name "dependencies" -Value ([PSCustomObject]@{})
+    }
+    $pkg.dependencies | Add-Member -MemberType NoteProperty -Name "opencode-goal-plugin" -Value "0.10.0" -Force
+    [System.IO.File]::WriteAllText("$configDir\package.json", ($pkg | ConvertTo-Json -Depth 20), [System.Text.Encoding]::UTF8)
+    & npm install --silent
+    Write-Success "opencode-goal-plugin@0.10.0 đã sẵn sàng trong $configDir\node_modules."
+} finally {
+    Pop-Location
+}
+
+# 2. Khôi phục plugin 9Remote notify (thư mục plugin/ số ít, opencode tự động load)
+$nineRemotePath = "$configDir\plugin\nineRemoteNotify.js"
+if (-not (Test-Path $nineRemotePath)) {
+    $nineRemoteDir = Split-Path $nineRemotePath -Parent
+    if (-not (Test-Path $nineRemoteDir)) {
+        New-Item -ItemType Directory -Path $nineRemoteDir -Force | Out-Null
+    }
+    $nineRemoteContent = @'
+// 9Remote OpenCode status plugin (auto-generated)
+const base = "http://localhost:2208/api/notify";
+const post = (type) => {
+  const sid = process.env.NINE_REMOTE_SESSION_ID || "";
+  if (!sid) return;
+  const url = base + "?type=" + type + "&sessionId=" + encodeURIComponent(sid) + "&tool=opencode";
+  try { fetch(url, { signal: AbortSignal.timeout(2000) }).catch(() => {}); } catch {}
+};
+export const nineRemoteNotify = async () => ({
+  "chat.message": async () => post("working"),
+  "tool.execute.before": async () => post("working"),
+  "tool.execute.after": async () => post("working"),
+  event: async ({ event }) => {
+    const t = event?.type;
+    if (!t) return;
+    if (t === "session.idle") return post("done");
+    if (t === "permission.asked" || t === "question.asked" || t === "session.error") return post("blocked");
+    if (t === "session.compacted" || t === "permission.replied" || t === "question.replied") return post("working");
+  },
+});
+'@
+    [System.IO.File]::WriteAllText($nineRemotePath, $nineRemoteContent, [System.Text.Encoding]::UTF8)
+    Write-Success "Đã khôi phục plugin 9Remote notify."
+} else {
+    Write-Info "Plugin 9Remote notify đã tồn tại, giữ nguyên."
+}
+
+# -----------------------------------------------------------
+# 8. CHUẨN HÓA VÀ TỐI ƯU TỆP OPENCODE.JSON (merge, không ghi đè)
+# -----------------------------------------------------------
+Write-Step "9. Chuẩn hóa tệp cấu hình opencode.json"
 
 $jsonPath = "$configDir\opencode.json"
+$requiredPlugins = @(
+    "./plugins",
+    "superpowers@git+https://github.com/obra/superpowers.git",
+    "opencode-goal-plugin@0.10.0"
+)
+$requiredSkillPaths = @("./skills", "~/.config/opencode/skills")
+
 if (Test-Path $jsonPath) {
     $rawJson = Get-Content $jsonPath -Raw -Encoding UTF8
     $cfg = $rawJson | ConvertFrom-Json
 
-    # 1. Tối ưu plugin array (tránh trùng lặp)
+    # 1. Merge plugin array: giữ entry lạ, đảm bảo đủ 3 entry bắt buộc.
+    # (Ghi đè 2 entry như trước đây sẽ xóa goal-plugin và làm /goal gãy.)
     $plugins = [System.Collections.Generic.List[string]]::new()
-    $plugins.Add("./plugins")
-    $plugins.Add("superpowers@git+https://github.com/obra/superpowers.git")
+    foreach ($p in @($cfg.plugin)) {
+        if ($p -and -not $plugins.Contains($p)) { $plugins.Add($p) }
+    }
+    foreach ($p in $requiredPlugins) {
+        if (-not $plugins.Contains($p)) { $plugins.Add($p) }
+    }
     $cfg.plugin = $plugins.ToArray()
 
-    # 2. Đảm bảo skills.paths trỏ đúng
+    # 2. Merge skills.paths: giữ path lạ, đảm bảo đủ path bắt buộc
     if (-not $cfg.skills) {
         $cfg | Add-Member -MemberType NoteProperty -Name "skills" -Value ([PSCustomObject]@{})
     }
-    $cfg.skills.paths = @("./skills", "~/.config/opencode/skills")
+    $skillPaths = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in @($cfg.skills.paths)) {
+        if ($p -and -not $skillPaths.Contains($p)) { $skillPaths.Add($p) }
+    }
+    foreach ($p in $requiredSkillPaths) {
+        if (-not $skillPaths.Contains($p)) { $skillPaths.Add($p) }
+    }
+    $cfg.skills.paths = $skillPaths.ToArray()
 
     # 3. Đảm bảo instructions có cả AGENTS.md và karpathy-guidelines.md
     $instList = [System.Collections.Generic.List[string]]::new()
@@ -291,18 +395,79 @@ if (Test-Path $jsonPath) {
         enabled = $true
     }) -Force
 
+    # 5. Đảm bảo slash command /goal tồn tại (plugin load nhưng thiếu command này thì /goal vẫn gãy)
+    if (-not $cfg.command) {
+        $cfg | Add-Member -MemberType NoteProperty -Name "command" -Value ([PSCustomObject]@{})
+    }
+    $cfg.command | Add-Member -MemberType NoteProperty -Name "goal" -Value ([PSCustomObject]@{
+        description = "Set a session-scoped goal and auto-continue until complete."
+        template = '$ARGUMENTS'
+        agent = "build"
+    }) -Force
+
     $newJson = $cfg | ConvertTo-Json -Depth 20
     [System.IO.File]::WriteAllText($jsonPath, $newJson, [System.Text.Encoding]::UTF8)
     Write-Success "Đã chuẩn hóa opencode.json thành công."
+} else {
+    # Fresh-install nhưng ECC không tự tạo opencode.json: tạo cấu hình tối thiểu thay vì skip lặng lẽ.
+    Write-Warn "Chưa có opencode.json, tạo cấu hình tối thiểu..."
+    $cfg = [PSCustomObject]@{
+        '$schema' = "https://opencode.ai/config.json"
+        plugin = $requiredPlugins
+        skills = [PSCustomObject]@{ paths = $requiredSkillPaths }
+        instructions = @("AGENTS.md", "karpathy-guidelines.md")
+        command = [PSCustomObject]@{
+            goal = [PSCustomObject]@{
+                description = "Set a session-scoped goal and auto-continue until complete."
+                template = '$ARGUMENTS'
+                agent = "build"
+            }
+        }
+        mcp = [PSCustomObject]@{
+            codegraph = [PSCustomObject]@{
+                type = "local"
+                command = @("codegraph", "serve", "--mcp")
+                enabled = $true
+            }
+        }
+    }
+    [System.IO.File]::WriteAllText($jsonPath, ($cfg | ConvertTo-Json -Depth 20), [System.Text.Encoding]::UTF8)
+    Write-Success "Đã tạo mới opencode.json tối thiểu."
 }
 
 # -----------------------------------------------------------
-# 8. XÁC MINH HOÀN TẤT
+# 9. XÁC MINH HOÀN TẤT
 # -----------------------------------------------------------
-Write-Step "9. Kiểm tra và xác nhận trạng thái cài đặt"
+Write-Step "10. Kiểm tra và xác nhận trạng thái cài đặt"
 
 Write-Host "`n[+] Danh sách MCP Servers:" -ForegroundColor Magenta
 & opencode mcp list
+
+# Xác minh goal-plugin: khai báo plugin + slash command + agent đích phải đồng thời tồn tại
+$cfgCheck = Get-Content "$configDir\opencode.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+if (@($cfgCheck.plugin) -contains "opencode-goal-plugin@0.10.0") {
+    Write-Success "Plugin opencode-goal-plugin đã khai báo."
+} else {
+    Write-Warn "Thiếu opencode-goal-plugin trong plugin[]."
+}
+$goalAgent = $cfgCheck.command.goal.agent
+if ($cfgCheck.command.goal -and $goalAgent -and $cfgCheck.agent.PSObject.Properties[$goalAgent]) {
+    Write-Success "Slash command /goal đã sẵn sàng (agent: $goalAgent)."
+} elseif ($cfgCheck.command.goal) {
+    Write-Warn "Có command /goal nhưng agent '$goalAgent' không tồn tại trong agent{} — /goal sẽ gãy, cần kiểm tra lại ECC install."
+} else {
+    Write-Warn "Thiếu command /goal trong command{}."
+}
+if (Test-Path "$configDir\node_modules\opencode-goal-plugin\package.json") {
+    Write-Success "Package opencode-goal-plugin đã cài trong node_modules."
+} else {
+    Write-Warn "Chưa thấy node_modules\opencode-goal-plugin."
+}
+if (Test-Path "$configDir\plugin\nineRemoteNotify.js") {
+    Write-Success "Plugin 9Remote notify đã sẵn sàng."
+} else {
+    Write-Warn "Thiếu plugin\9Remote notify (plugin\nineRemoteNotify.js)."
+}
 
 $skillCount = (Get-ChildItem "$configDir\skills" -Directory -ErrorAction SilentlyContinue | Measure-Object).Count
 Write-Host "`n[+] Tổng số kỹ năng (Skills) đã cài đặt: $skillCount" -ForegroundColor Magenta
