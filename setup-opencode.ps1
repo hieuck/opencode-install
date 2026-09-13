@@ -48,26 +48,130 @@ function Write-Warn {
 }
 
 # -----------------------------------------------------------
-# 0. KIỂM TRA MÔI TRƯỜNG YÊU CẦU
+# 0. KIỂM TRA & CÀI ĐẶT MÔI TRƯỜNG YÊU CẦU
 # -----------------------------------------------------------
-Write-Step "1. Kiểm tra môi trường hệ thống (Node.js, npm, git)"
+Write-Step "1. Kiểm tra & cài đặt môi trường (Node.js, npm, git)"
 
-try {
-    $nodeVer = & node --version
-    $npmVer = & npm --version
-    Write-Success "Node.js: $nodeVer | npm: $npmVer"
-} catch {
-    Write-Error "Không tìm thấy Node.js/npm. Vui lòng cài đặt Node.js trước khi chạy script."
-    exit 1
+# Thư mục cache tool portable (sống sót qua wipe để lần sau khỏi tải lại).
+$ToolsDir = "$env:LOCALAPPDATA\opencode-install\tools"
+
+function Reset-SessionPath {
+    # winget cài xong nhưng shell hiện tại chưa thấy lệnh mới → nạp lại PATH từ registry.
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:PATH = "$machinePath;$userPath"
 }
 
-try {
-    $gitVer = & git --version
-    Write-Success "Git: $gitVer"
-} catch {
-    Write-Error "Không tìm thấy Git. Vui lòng cài đặt Git trước khi chạy script."
-    exit 1
+function Add-ToolPath {
+    param([string]$Dir)
+    # Dùng ngay trong session hiện tại + lưu persistent (user scope, không cần admin).
+    if (($env:PATH -split ";") -notcontains $Dir) { $env:PATH = "$Dir;$env:PATH" }
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ((($userPath -split ";") -notcontains $Dir)) {
+        [Environment]::SetEnvironmentVariable("Path", "$Dir;$userPath", "User")
+    }
 }
+
+function Install-PortablePrereq {
+    # Fallback khi không có winget / winget gãy: tải bản portable CHÍNH CHỦ,
+    # không cần admin. Lỗi ở đâu dừng loud ở đó, không bao giờ cài dở dang.
+    param([ValidateSet("node", "git")][string]$Kind)
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        Write-Error "Bootstrap portable chỉ hỗ trợ Windows 64-bit."
+        exit 1
+    }
+    if (-not (Test-Path $ToolsDir)) {
+        New-Item -ItemType Directory -Path $ToolsDir -Force | Out-Null
+    }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("opencode-dl-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    try {
+        if ($Kind -eq "node") {
+            Write-Info "Hỏi nodejs.org bản LTS mới nhất..."
+            $index = Invoke-WebRequest -Uri "https://nodejs.org/dist/index.json" -UseBasicParsing | ConvertFrom-Json
+            $lts = @($index | Where-Object { $_.lts })[0]
+            if (-not $lts) {
+                Write-Error "Không đọc được danh sách LTS từ nodejs.org."
+                exit 1
+            }
+            $ver = $lts.version  # dạng "v24.x.x"
+            $zipPath = Join-Path $tmp "node.zip"
+            Write-Info "Tải Node $ver portable (~30MB)..."
+            Invoke-WebRequest -Uri "https://nodejs.org/dist/$ver/node-$ver-win-x64.zip" -OutFile $zipPath -UseBasicParsing
+            Get-ChildItem (Join-Path $ToolsDir "node-v*") -Directory -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Info "Giải nén Node portable..."
+            Expand-Archive -Path $zipPath -DestinationPath $ToolsDir -Force
+            Add-ToolPath (Join-Path $ToolsDir "node-$ver-win-x64")
+        } else {
+            Write-Info "Hỏi GitHub API release mới nhất của git-for-windows..."
+            $rel = Invoke-WebRequest -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -UseBasicParsing -Headers @{ "User-Agent" = "opencode-install" } | ConvertFrom-Json
+            $asset = @($rel.assets | Where-Object { $_.name -like "PortableGit-*-64-bit.7z.exe" })[0]
+            if (-not $asset) {
+                Write-Error "Không tìm thấy asset PortableGit trong release mới nhất."
+                exit 1
+            }
+            $sfxPath = Join-Path $tmp "portablegit.exe"
+            Write-Info "Tải $($asset.name) (~60MB)..."
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $sfxPath -UseBasicParsing
+            $dest = Join-Path $ToolsDir "PortableGit"
+            if (Test-Path $dest) {
+                Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+            Write-Info "Giải nén Git portable (silent)..."
+            # SFX của PortableGit là GUI-subsystem: toán tử & không chờ nó xong
+            # (trả về ngay, thuốc giải nén chưa chạy) → bắt buộc Start-Process -Wait.
+            $sfxProc = Start-Process -FilePath $sfxPath -ArgumentList "-y", "-o$dest" -Wait -PassThru
+            if ($sfxProc.ExitCode -ne 0) {
+                Write-Error "Giải nén PortableGit thất bại (exit $($sfxProc.ExitCode))."
+                exit 1
+            }
+            Add-ToolPath (Join-Path $dest "cmd")
+        }
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-Tool {
+    param(
+        [string]$Command,
+        [string]$DisplayName,
+        [string]$WingetId,
+        [string]$ManualUrl,
+        [ValidateSet("node", "git")][string]$PortableKind
+    )
+    if (Get-Command $Command -ErrorAction SilentlyContinue) { return }
+    # Tầng 1: winget (nhanh, có thể hỏi UAC).
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Info "Cài $DisplayName qua winget (có thể hiện UAC xin quyền admin)..."
+        & winget install --id $WingetId --silent --accept-source-agreements --accept-package-agreements
+        Reset-SessionPath
+    } else {
+        Write-Warn "Không có winget, bỏ qua tầng winget."
+    }
+    # Tầng 2: bootstrap portable chính chủ trong repo (không cần admin).
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        Write-Warn "winget thất bại/không có → fallback portable..."
+        Install-PortablePrereq -Kind $PortableKind
+        Reset-SessionPath
+    }
+    # Tầng 3: chịu thua → báo link tay, dừng loud.
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        Write-Error "Không cài được $DisplayName. Đóng mở lại terminal rồi chạy lại script, hoặc cài tay tại: $ManualUrl"
+        exit 1
+    }
+    Write-Success "$DisplayName đã sẵn sàng."
+}
+
+Ensure-Tool -Command "node" -DisplayName "Node.js LTS (kèm npm)" -WingetId "OpenJS.NodeJS.LTS" -ManualUrl "https://nodejs.org/" -PortableKind "node"
+Ensure-Tool -Command "git" -DisplayName "Git" -WingetId "Git.Git" -ManualUrl "https://git-scm.com/download/win" -PortableKind "git"
+
+$nodeVer = & node --version
+$npmVer = & npm --version
+$gitVer = & git --version
+Write-Success "Node.js: $nodeVer | npm: $npmVer | Git: $gitVer"
 
 # -----------------------------------------------------------
 # 1. GỠ BỎ SẠCH SẼ OPENCODE CŨ (fresh install only)
@@ -129,7 +233,17 @@ if (-not $SkipUninstall) {
 Write-Step "3. Cài đặt mới OpenCode CLI và các công cụ bổ trợ"
 
 Write-Info "Cài đặt opencode-ai toàn cục qua npm (pin major v1: opencode-goal-plugin chỉ hỗ trợ opencode >=1.17.15 <2)..."
+# npm >= 11.6 yêu cầu allow-list cho install scripts; npm cũ (Node 20/22 LTS) không hiểu
+# flag này → thử có flag trước, gãy thì cài kiểu cũ (vẫn chạy scripts + cảnh báo).
 & npm install -g --allow-scripts=opencode-ai opencode-ai@1
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "npm không hỗ trợ --allow-scripts, cài lại kiểu tương thích..."
+    & npm install -g opencode-ai@1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Cài opencode-ai thất bại. Kiểm tra mạng và npm."
+        exit 1
+    }
+}
 
 # Ưu tiên CodeGraph CLI standalone nếu đã có, tránh cài trùng 2 bản (standalone + npm) gây lệch version.
 if (Get-Command codegraph -ErrorAction SilentlyContinue) {
@@ -387,7 +501,9 @@ Write-Host "    - Superpowers (TDD, Brainstorming, Subagents, v.v.)" -Foreground
 Write-Host "    - ECC Developer (Database, Quality, Memory, v.v.)" -ForegroundColor Gray
 Write-Host "    - Karpathy Guidelines (Surgical changes, Simplicity, v.v.)" -ForegroundColor Gray
 
-Write-Host "`n[!] Khởi động lại OpenCode để nhận config mới (bắt buộc sau -SkipUninstall, theo README chính thức của goal-plugin)." -ForegroundColor Yellow
+if ($SkipUninstall) {
+    Write-Host "`n[!] Khởi động lại OpenCode để nhận config mới (theo README chính thức của goal-plugin)." -ForegroundColor Yellow
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "`n========================================================" -ForegroundColor Red

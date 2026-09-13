@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Auto detect text files and normalize to LF in repo AND working tree.
+# eol=lf overrides core.autocrlf: identical bytes on every OS, no more
+# "LF will be replaced by CRLF" warnings. PowerShell (5.1/7+) parses LF fine,
+# and the .bat here is simple enough for modern cmd.exe.
+* text=auto eol=lf

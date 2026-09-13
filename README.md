@@ -41,9 +41,15 @@ Nhấp đúp `setup-opencode.bat` để fresh-install toàn bộ.
 .\setup-opencode.ps1 -SkipUninstall
 ```
 
-### Yêu cầu
+### Yêu cầu (máy trắng cần có trước)
 
-- Windows + PowerShell, Node.js, npm, Git (script tự kiểm tra và dừng nếu thiếu).
+- Windows + PowerShell 5.1 trở lên (script không dùng cú pháp PS7-only).
+- **Có mạng** (mọi bước cài đều tải từ internet).
+- Node.js LTS + Git: nếu thiếu, script tự cài theo 3 tầng — winget (có thể hiện
+  UAC) → portable chính chủ tải về `%LOCALAPPDATA%\opencode-install\tools`
+  (không cần admin, sống sót qua wipe để lần sau khỏi tải lại) → báo link cài tay.
+  Tay: https://nodejs.org/ và https://git-scm.com/download/win.
+- Chạy trực tiếp file `.ps1` thì thêm `-ExecutionPolicy Bypass` (file `.bat` đã làm sẵn).
 
 ## Fresh-install làm gì, theo thứ tự
 

@@ -7,6 +7,12 @@ Ngày theo lịch sử commit của repo.
 
 ### Added
 
+- Step 1 tự cài Node.js LTS / Git còn thiếu qua winget (kèm UAC nếu cần),
+  nạp lại PATH và verify; không có winget thì báo link cài tay rồi dừng.
+- Fallback portable khi không có winget (hoặc winget gãy): tải Node LTS portable
+  từ nodejs.org + PortableGit từ git-for-windows (SFX giải nén bằng
+  `Start-Process -Wait` vì `&` không chờ tiến trình GUI), không cần admin,
+  cache ở `%LOCALAPPDATA%\opencode-install\tools` để lần sau khỏi tải lại.
 - Step verify fail loudly: thiếu mảnh ghép nào (plugin, `/goal`, agent đích,
   `node_modules`) là exit 1 kèm danh sách đỏ, thay vì báo thành công giả.
 - Đối chiếu `opencode debug config` cuối cài đặt để xác nhận plugin thực tế được load.
@@ -35,6 +41,9 @@ Ngày theo lịch sử commit của repo.
 - Bỏ ghi đè `plugin[]` — nguyên nhân `/goal` gãy mỗi lần chạy installer cũ.
 
 ### Fixed
+
+- npm cũ (Node 20/22 LTS) không hiểu flag `--allow-scripts` làm gãy bước cài
+  opencode-ai → tự fallback cài kiểu tương thích, gãy tiếp mới exit 1.
 
 - `/goal` không hiện: thêm block `command.goal` vào config (plugin đã load nhưng
   thiếu slash command).
