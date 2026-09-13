@@ -7,13 +7,12 @@ Script cài mới / cập nhật OpenCode về trạng thái chuẩn, chạy l�
 
 | Thành phần | Nguồn | Cách cài |
 |---|---|---|
-| OpenCode CLI (**pin major v1**) | npm `opencode-ai@1` | Cài global. Pin v1 vì `opencode-goal-plugin` chỉ hỗ trợ opencode `<2` |
-| Superpowers (`obra/superpowers`) | `opencode plugin ... -g` + npm | Đăng ký plugin, skills chỉ copy mục mới (không ghi đè) |
-| ECC Developer profile | `ecc install --profile developer --target opencode --enable-hooks` | Kèm hook runtime (`plugins/ecc-hooks.ts`) |
-| CodeGraph MCP | CLI standalone (nếu có) hoặc npm, rồi `codegraph install --target opencode --location global` | Ưu tiên bản standalone để tránh trùng 2 bản |
+| [OpenCode CLI](https://opencode.ai) (**pin major v1**) | npm `opencode-ai@1` | Cài global. Pin v1 vì `opencode-goal-plugin` chỉ hỗ trợ opencode `<2` |
+| [Superpowers](https://github.com/obra/superpowers) (`obra/superpowers`) | `opencode plugin ... -g` + npm | Đăng ký plugin, skills chỉ copy mục mới (không ghi đè) |
+| [ECC](https://github.com/affaan-m/ECC) Developer profile | `ecc install --profile developer --target opencode --enable-hooks` | Kèm hook runtime (`plugins/ecc-hooks.ts`) |
+| [CodeGraph MCP](https://github.com/colbymchenry/codegraph) | CLI standalone (nếu có) hoặc npm, rồi `codegraph install --target opencode --location global` | Ưu tiên bản standalone để tránh trùng 2 bản |
 | Karpathy guidelines | Tải trực tiếp từ upstream [`multica-ai/andrej-karpathy-skills`](https://github.com/multica-ai/andrej-karpathy-skills) | Không snapshot, luôn dùng bản mới nhất |
-| opencode-goal-plugin + `/goal` | npm `opencode-goal-plugin@0.10.0` + merge config | Kèm slash command `/goal` (plugin load nhưng thiếu command này thì `/goal` vẫn gãy) |
-| 9Remote notify | 9Remote tự thêm/quản lý | Script không can thiệp |
+| [opencode-goal-plugin](https://github.com/willytop8/OpenCode-goal-plugin) + `/goal` | npm `opencode-goal-plugin@0.10.0` + merge config | Kèm slash command `/goal` (plugin load nhưng thiếu command này thì `/goal` vẫn gãy) |
 
 ## Nguyên tắc thiết kế (mô hình delta)
 
