@@ -1,13 +1,27 @@
 ﻿# OpenCode Full Suite Installer
 
-Bộ kịch bản tự động hóa gỡ sạch, cài đặt mới OpenCode và tích hợp toàn bộ các plugin & MCP mạnh mẽ:
+Fresh-install deterministic: wipe sạch → cài binaries → chạy installer bên thứ 3
+(ECC/CodeGraph đẻ skills, hooks, commands) → áp delta của mình (merge, idempotent).
+Chạy lại lần nào cũng ra đúng một trạng thái — hoàn hảo ngay lần đầu, không cần vá tay.
+
 - **OpenCode CLI**: AI coding agent (pin major v1 để tương thích goal-plugin)
 - **Superpowers (`obra/superpowers`)**: Framework phát triển phần mềm chuẩn mực (TDD, Brainstorming, Subagents, Worktrees)
 - **ECC (`affaan-m/ECC`)**: Profile Developer (Database patterns, Quality workflows, Unified memory) — giữ hook runtime
 - **CodeGraph (`colbymchenry/codegraph`)**: MCP code intelligence & semantic graph
-- **Andrej Karpathy Guidelines (`multica-ai/andrej-karpathy-skills`)**: 4 nguyên tắc vàng định hướng hành vi của AI coding
+- **Andrej Karpathy Guidelines**: tải trực tiếp từ upstream (`multica-ai/andrej-karpathy-skills`, theo README chính thức của họ) — không snapshot, luôn dùng bản mới nhất
 - **opencode-goal-plugin**: Session-scoped goal workflow kèm slash command `/goal`
-- **9Remote notify (`plugin/nineRemoteNotify.js`)**: Plugin local báo trạng thái session về 9Remote
+- Plugin 9Remote do chính 9Remote tự thêm/quản lý — script không can thiệp
+
+## Source of truth (mô hình delta)
+
+Repo này không ôm snapshot config. Quy tắc ownership:
+
+- Installer bên thứ 3 (ECC/CodeGraph/opencode CLI) sở hữu file của chúng
+  (skills, commands, agents, hooks...) — script không đụng tới, luôn dùng bản mới nhất.
+- Nội dung upstream (karpathy) → tải trực tiếp từ repo gốc, không snapshot.
+- File chia sẻ (`opencode.json`, `package.json`) → script **merge delta**
+  (goal plugin + slash command `/goal`), giữ nguyên agents/commands mới nhất của installer.
+- Plugin 9Remote do chính 9Remote tự thêm/quản lý.
 
 ## Cách sử dụng
 
