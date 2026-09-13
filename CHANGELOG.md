@@ -1,0 +1,41 @@
+# Changelog
+
+Định dạng theo [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Ngày theo lịch sử commit của repo.
+
+## [Unreleased]
+
+### Added
+
+- Step verify fail loudly: thiếu mảnh ghép nào (plugin, `/goal`, agent đích,
+  `node_modules`) là exit 1 kèm danh sách đỏ, thay vì báo thành công giả.
+- Đối chiếu `opencode debug config` cuối cài đặt để xác nhận plugin thực tế được load.
+- Kiểm tra môi trường (Node.js, npm, git) fail-fast ngay đầu script.
+- Cài CodeGraph có điều kiện: dùng bản standalone nếu có, tránh trùng bản npm.
+
+### Changed
+
+- Mô hình delta idempotent: installer bên thứ 3 sở hữu file của chúng, script chỉ
+  merge delta (goal plugin + `/goal`); fresh và update chung một đường.
+- ECC cài kèm hook runtime (`--enable-hooks`) cho khớp setup chuẩn.
+- Karpathy guidelines tải trực tiếp từ upstream, không snapshot trong repo.
+- Sync skills Superpowers chỉ copy skill mới, không ghi đè skill đã có.
+- Pin `opencode-ai@1` (goal-plugin chỉ hỗ trợ opencode `<2`).
+
+### Removed
+
+- Bỏ thư mục `config/` snapshot (`opencode.json`, `package.json`, `AGENTS.md`,
+  karpathy): tránh thối rữa khi upstream update agents/commands/MCP fields.
+- Bỏ quản lý plugin 9Remote trong script (9Remote tự thêm/quản lý; ôm snapshot cũ
+  sẽ ghi đè bản mới của nó).
+- Bỏ ghi đè `plugin[]` — nguyên nhân `/goal` gãy mỗi lần chạy installer cũ.
+
+### Fixed
+
+- `/goal` không hiện: thêm block `command.goal` vào config (plugin đã load nhưng
+  thiếu slash command).
+- `opencode-goal-plugin` thiếu trong `package.json` dependencies → merge dep + `npm install`.
+- Markdown fences của karpathy (```` ``` ````) bị PowerShell nuốt thành `` ` `` khi ghi
+  file qua here-string `@" "@` → dùng file tải trực tiếp, không qua string processing.
+- Gán property lên object từ `ConvertFrom-Json` khi key chưa tồn tại sẽ throw →
+  dùng `Add-Member -Force` ở các điểm merge.
