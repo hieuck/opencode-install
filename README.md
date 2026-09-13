@@ -8,6 +8,7 @@ Script cài mới / cập nhật OpenCode về trạng thái chuẩn, chạy l�
 | Thành phần | Nguồn | Cách cài |
 |---|---|---|
 | [OpenCode CLI](https://opencode.ai) (**pin major v1**) | npm `opencode-ai@1` | Cài global. Pin v1 vì `opencode-goal-plugin` chỉ hỗ trợ opencode `<2` |
+| [OpenCode Desktop](https://github.com/anomalyco/opencode/releases) (**pin v1.18.30**) | Asset `opencode-desktop-win-{x64,arm64}.exe` từ GitHub releases, cài silent `/S` per-user | Bỏ qua tải lại nếu đã có cùng major; verify check lệch major (Desktop tự update có thể drift khỏi CLI) |
 | [Superpowers](https://github.com/obra/superpowers) (`obra/superpowers`) | `opencode plugin ... -g` + npm | Đăng ký plugin, skills chỉ copy mục mới (không ghi đè) |
 | [ECC](https://github.com/affaan-m/ECC) Developer profile | `ecc install --profile developer --target opencode --enable-hooks` | Kèm hook runtime (`plugins/ecc-hooks.ts`) |
 | [CodeGraph MCP](https://github.com/colbymchenry/codegraph) | CLI standalone (nếu có) hoặc npm, rồi `codegraph install --target opencode --location global` | Ưu tiên bản standalone để tránh trùng 2 bản |
@@ -49,18 +50,21 @@ Nhấp đúp `setup-opencode.bat` để fresh-install toàn bộ.
   UAC) → portable chính chủ tải về `%LOCALAPPDATA%\opencode-install\tools`
   (không cần admin, sống sót qua wipe để lần sau khỏi tải lại) → báo link cài tay.
   Tay: https://nodejs.org/ và https://git-scm.com/download/win.
+  Giữ cache portable là cố ý (ecc CLI cần node runtime); step verify báo dung lượng
+  và trạng thái dùng/dormant — dormant thì xóa tay nếu muốn.
 - Chạy trực tiếp file `.ps1` thì thêm `-ExecutionPolicy Bypass` (file `.bat` đã làm sẵn).
 
 ## Fresh-install làm gì, theo thứ tự
 
-1. Dừng processes opencode, gỡ OpenCode Desktop + package npm, xóa 7 thư mục
+1. Dừng processes opencode, gỡ OpenCode Desktop + CLI + package npm, xóa 7 thư mục
    dữ liệu/cấu hình/cache (`~/.config/opencode`, `%APPDATA%`, `%LOCALAPPDATA%`...).
 2. Cài binaries: `opencode-ai@1`, `ecc-universal`, CodeGraph (nếu chưa có).
 3. Chạy installer bên thứ 3 để chúng đẻ artifacts: CodeGraph MCP wiring,
    ECC skills/commands/hooks, đăng ký Superpowers.
-4. Áp delta: tải karpathy, merge `package.json` + `opencode.json`,
+4. Cài OpenCode Desktop (pin version, silent, per-user, tự chọn x64/arm64).
+5. Áp delta: tải karpathy, merge `package.json` + `opencode.json`,
    `npm install`, sync skills mới, copy skill karpathy.
-5. Verify: `opencode mcp list`, check plugin/`/goal`/agent đích/node_modules,
+6. Verify: `opencode mcp list`, check plugin/`/goal`/agent đích/node_modules/Desktop,
    đối chiếu `opencode debug config` thực tế. Lỗi → exit 1.
 
 ## Ghi chú

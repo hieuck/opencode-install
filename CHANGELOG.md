@@ -7,12 +7,19 @@ Ngày theo lịch sử commit của repo.
 
 ### Added
 
+- Cài OpenCode Desktop vào script (asset `opencode-desktop-win-{x64,arm64}.exe` từ
+  GitHub releases, pin `v1.18.30`, silent `/S` per-user, tự chọn arch, bỏ qua tải
+  lại nếu đã có cùng major, tự cài lại nếu lệch major). Verify check exe + version
+  và cảnh báo khi Desktop lệch major với CLI (Desktop tự update có thể drift).
+
 - Step 1 tự cài Node.js LTS / Git còn thiếu qua winget (kèm UAC nếu cần),
   nạp lại PATH và verify; không có winget thì báo link cài tay rồi dừng.
 - Fallback portable khi không có winget (hoặc winget gãy): tải Node LTS portable
   từ nodejs.org + PortableGit từ git-for-windows (SFX giải nén bằng
   `Start-Process -Wait` vì `&` không chờ tiến trình GUI), không cần admin,
   cache ở `%LOCALAPPDATA%\opencode-install\tools` để lần sau khỏi tải lại.
+- Verify báo dung lượng + trạng thái dùng/dormant của cache portable
+  (giữ là cố ý vì ecc CLI cần node runtime; dormant thì user tự xóa tay).
 - Step verify fail loudly: thiếu mảnh ghép nào (plugin, `/goal`, agent đích,
   `node_modules`) là exit 1 kèm danh sách đỏ, thay vì báo thành công giả.
 - Đối chiếu `opencode debug config` cuối cài đặt để xác nhận plugin thực tế được load.

@@ -11,7 +11,8 @@
       (tránh ghi đè bản mới của nó bằng snapshot cũ).
     - Fresh hay update (-SkipUninstall) chạy chung một đường → chạy lại vẫn ra một kết quả.
 
-    Bao gồm: OpenCode CLI (pin major v1) + Superpowers + ECC developer (giữ hooks)
+    Bao gồm: OpenCode CLI (pin major v1) + OpenCode Desktop (pin theo biến $DesktopVersion
+    trong script, hiện v1.18.30) + Superpowers + ECC developer (giữ hooks)
     + CodeGraph MCP + Karpathy guidelines + opencode-goal-plugin (/goal).
 
 .PARAMETER SkipUninstall
@@ -291,7 +292,45 @@ Write-Step "6. Đăng ký Superpowers (obra/superpowers) với OpenCode"
 Write-Success "Superpowers đã được đăng ký (node_modules + skills sync ở bước 7)."
 
 # -----------------------------------------------------------
-# 6. ÁP DELTA CẤU HÌNH CHUẨN (idempotent — chạy lại vẫn ra một kết quả)
+# 6. CÀI OPENCODE DESKTOP (bản win per-user từ GitHub releases, không cần admin)
+# -----------------------------------------------------------
+Write-Step "7. Cài đặt OpenCode Desktop"
+
+# Pin Desktop theo CLI major v1 — bump tay theo https://github.com/anomalyco/opencode/releases
+$DesktopVersion = "v1.18.30"
+$desktopExe = "$env:LOCALAPPDATA\Programs\@opencode-aidesktop\OpenCode.exe"
+$desktopArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+$needDesktop = $true
+if ((Test-Path $desktopExe) -and $SkipUninstall) {
+    $installedDeskVer = (Get-Item $desktopExe).VersionInfo.FileVersion
+    if ($installedDeskVer.Split('.')[0] -eq $DesktopVersion.TrimStart('v').Split('.')[0]) {
+        Write-Info "OpenCode Desktop $installedDeskVer đã có sẵn, bỏ qua tải lại."
+        $needDesktop = $false
+    } else {
+        Write-Warn "Desktop $installedDeskVer lệch major với pin $DesktopVersion → cài lại cho đồng bộ CLI."
+    }
+}
+if ($needDesktop) {
+    $desktopUrl = "https://github.com/anomalyco/opencode/releases/download/$DesktopVersion/opencode-desktop-win-$desktopArch.exe"
+    $desktopInstaller = Join-Path ([IO.Path]::GetTempPath()) "opencode-desktop-setup.exe"
+    Write-Info "Tải OpenCode Desktop $DesktopVersion ($desktopArch, ~120MB)..."
+    Invoke-WebRequest -Uri $desktopUrl -OutFile $desktopInstaller -UseBasicParsing
+    Write-Info "Cài silent (per-user, không cần admin)..."
+    $deskProc = Start-Process -FilePath $desktopInstaller -ArgumentList "/S" -Wait -PassThru
+    Remove-Item $desktopInstaller -Force -ErrorAction SilentlyContinue
+    if ($deskProc.ExitCode -ne 0) {
+        Write-Error "Cài OpenCode Desktop thất bại (exit $($deskProc.ExitCode))."
+        exit 1
+    }
+    if (-not (Test-Path $desktopExe)) {
+        Write-Error "Cài xong nhưng không thấy OpenCode.exe tại $desktopExe."
+        exit 1
+    }
+    Write-Success "OpenCode Desktop đã sẵn sàng: phiên bản $((Get-Item $desktopExe).VersionInfo.FileVersion)"
+}
+
+# -----------------------------------------------------------
+# 7. ÁP DELTA CẤU HÌNH CHUẨN (idempotent — chạy lại vẫn ra một kết quả)
 #    Quy tắc ownership:
 #    - Nội dung UPSTREAM (karpathy) → tải trực tiếp từ repo gốc, không snapshot.
 #    - File CHIA SẺ (installer cũng ghi: opencode.json, package.json) → merge delta goal.
@@ -299,7 +338,7 @@ Write-Success "Superpowers đã được đăng ký (node_modules + skills sync 
 #      plugin 9Remote...) → không đụng tới, luôn dùng bản mới nhất
 #      (tránh snapshot thối rữa hoặc ghi đè bản mới của tool khác).
 # -----------------------------------------------------------
-Write-Step "7. Áp delta cấu hình chuẩn vào $configDir"
+Write-Step "8. Áp delta cấu hình chuẩn vào $configDir"
 
 $requiredPlugins = @(
     "./plugins",
@@ -431,9 +470,9 @@ Copy-Item "$configDir\karpathy-guidelines.md" "$karpathySkillDir\SKILL.md" -Forc
 Write-Success "Skill karpathy-guidelines đã đồng bộ."
 
 # -----------------------------------------------------------
-# 7. XÁC MINH HOÀN TẤT (fail loudly nếu thiếu mảnh ghép nào)
+# 8. XÁC MINH HOÀN TẤT (fail loudly nếu thiếu mảnh ghép nào)
 # -----------------------------------------------------------
-Write-Step "8. Kiểm tra và xác nhận trạng thái cài đặt"
+Write-Step "9. Kiểm tra và xác nhận trạng thái cài đặt"
 
 Write-Host "`n[+] Danh sách MCP Servers:" -ForegroundColor Magenta
 & opencode mcp list
@@ -493,6 +532,32 @@ try {
     }
 } catch {
     Write-Warn "Không chạy được 'opencode debug config' để đối chiếu: $_"
+}
+
+$desktopExeCheck = "$env:LOCALAPPDATA\Programs\@opencode-aidesktop\OpenCode.exe"
+if (Test-Path $desktopExeCheck) {
+    $deskFileVer = (Get-Item $desktopExeCheck).VersionInfo.FileVersion
+    Write-Success "OpenCode Desktop đã cài: phiên bản $deskFileVer"
+    if ($deskFileVer.Split('.')[0] -ne $DesktopVersion.TrimStart('v').Split('.')[0]) {
+        Write-Warn "Desktop ($deskFileVer) lệch major với pin ($DesktopVersion) — /goal có thể gãy trên Desktop."
+    }
+} else {
+    Write-Warn "Thiếu OpenCode Desktop."
+    $failures += "thiếu OpenCode Desktop"
+}
+
+# Minh bạch cache portable: phải giữ vì ecc CLI cần node runtime (xóa là ecc chết
+# trên máy không có system node). Chỉ báo dormant để user tự dọn, không tự xóa.
+if (Test-Path $ToolsDir) {
+    $toolsMB = [math]::Round(((Get-ChildItem $ToolsDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB), 1)
+    $toolsInUse = @("node", "git") | Where-Object {
+        (Get-Command $_ -ErrorAction SilentlyContinue).Source -like "$ToolsDir*"
+    }
+    if (@($toolsInUse).Count -eq 0) {
+        Write-Info "Cache portable ($toolsMB MB) đang dormant (đã có system node/git) — xóa tay nếu muốn: Remove-Item '$ToolsDir' -Recurse -Force"
+    } else {
+        Write-Info "Cache portable ($toolsMB MB) đang dùng ($($toolsInUse -join ', ')) — giữ lại để chạy."
+    }
 }
 
 $skillCount = (Get-ChildItem "$configDir\skills" -Directory -ErrorAction SilentlyContinue | Measure-Object).Count
