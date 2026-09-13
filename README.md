@@ -9,7 +9,7 @@ Script cài mới / cập nhật OpenCode về trạng thái chuẩn, chạy l�
 |---|---|---|
 | [OpenCode CLI](https://opencode.ai) (**pin major v1**) | npm `opencode-ai@1` | Cài global. Pin v1 vì `opencode-goal-plugin` chỉ hỗ trợ opencode `<2` |
 | [OpenCode Desktop](https://github.com/anomalyco/opencode/releases) (**pin v1.18.30**) | Asset `opencode-desktop-win-{x64,arm64}.exe` từ GitHub releases, cài silent `/S` per-user | Bỏ qua tải lại nếu đã có cùng major; verify check lệch major (Desktop tự update có thể drift khỏi CLI) |
-| [Superpowers](https://github.com/obra/superpowers) (`obra/superpowers`) | `opencode plugin ... -g` + npm | Đăng ký plugin, skills chỉ copy mục mới (không ghi đè) |
+| [Superpowers](https://github.com/obra/superpowers) (`obra/superpowers`) | entry git-spec trong `plugin[]` (opencode tự fetch + đăng ký skills), fallback npm local nếu Bun không fetch được | Không npm install/copy skills tràn lan (personal shadow plugin) |
 | [ECC](https://github.com/affaan-m/ECC) Developer profile | `ecc install --profile developer --target opencode --enable-hooks` | Kèm hook runtime (`plugins/ecc-hooks.ts`) |
 | [CodeGraph MCP](https://github.com/colbymchenry/codegraph) | CLI standalone (nếu có) hoặc npm, rồi `codegraph install --target opencode --location global` | Ưu tiên bản standalone để tránh trùng 2 bản |
 | Karpathy guidelines | Tải trực tiếp từ upstream [`multica-ai/andrej-karpathy-skills`](https://github.com/multica-ai/andrej-karpathy-skills) | Không snapshot, luôn dùng bản mới nhất |
@@ -63,7 +63,7 @@ Nhấp đúp `setup-opencode.bat` để fresh-install toàn bộ.
    ECC skills/commands/hooks, đăng ký Superpowers.
 4. Cài OpenCode Desktop (pin version, silent, per-user, tự chọn x64/arm64).
 5. Áp delta: tải karpathy, merge `package.json` + `opencode.json`,
-   `npm install`, sync skills mới, copy skill karpathy.
+   `npm install`, copy skill karpathy.
 6. Verify: `opencode mcp list`, check plugin/`/goal`/agent đích/node_modules/Desktop,
    đối chiếu `opencode debug config` thực tế. Lỗi → exit 1.
 
@@ -72,8 +72,12 @@ Nhấp đúp `setup-opencode.bat` để fresh-install toàn bộ.
 - `/goal` cần đồng thời 3 thứ: entry trong `plugin[]`, dep trong `package.json`,
   và block `command.goal` trong config — thiếu 1 là gãy. Step verify check cả 3
   rồi chạy tiếp **bộ verify 8-check chính chủ** của plugin (`scripts/verify.mjs`).
-- Fresh-install xóa cả package cache cũ của goal-plugin (`~/.cache/opencode/packages`),
-  vì theo README chính thức cache stale khiến bản bug cũ chạy mãi dù đã bump pin.
+- Merge prune instruction refs trỏ file không tồn tại (skills thuộc module ngoài
+  profile `developer` hoặc bị skip ở target opencode) để opencode khỏi warning
+  mỗi lần khởi động — danh sách prune in rõ ra output.
+- Fresh-install xóa cả package cache cũ của goal-plugin và superpowers
+  (`~/.cache/opencode/packages`): cache stale khiến bản bug cũ chạy mãi (goal-plugin),
+  và restart có thể không pick commit superpowers mới.
 - Khi goal-plugin hỗ trợ opencode v2 (hoặc bỏ goal-plugin), đổi `opencode-ai@1`
   thành `opencode-ai@latest` trong script.
 - Xem lịch sử thay đổi trong [CHANGELOG.md](CHANGELOG.md).

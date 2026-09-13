@@ -27,20 +27,30 @@ Ngày theo lịch sử commit của repo.
 - Fresh-install xóa package cache cũ của goal-plugin (tránh chạy bản stale theo
   khuyến cáo upgrading của README chính thức).
 - Nhắc khởi động lại OpenCode cuối cài đặt (bắt buộc sau `-SkipUninstall`).
+- Fallback Windows cho superpowers: warm `opencode debug config` rồi check package
+  cache, chỉ dùng npm local + entry local path khi git-spec fetch thất bại
+  (đúng mục Windows install issues trong README chính thức).
+- Verify cảnh báo clones superpowers cũ trong skills/ cá nhân (shadow bản plugin)
+  và check superpowers trong resolved config; fresh xóa package cache superpowers
+  để luôn lấy main mới nhất.
 - Kiểm tra môi trường (Node.js, npm, git) fail-fast ngay đầu script.
 - Cài CodeGraph có điều kiện: dùng bản standalone nếu có, tránh trùng bản npm.
 
 ### Changed
 
+- Cài superpowers theo cách chính thức tối thiểu (chỉ entry plugin[] trong config,
+  opencode tự fetch + đăng ký skills) thay vì npm install + copy skills.
 - Mô hình delta idempotent: installer bên thứ 3 sở hữu file của chúng, script chỉ
   merge delta (goal plugin + `/goal`); fresh và update chung một đường.
 - ECC cài kèm hook runtime (`--enable-hooks`) cho khớp setup chuẩn.
 - Karpathy guidelines tải trực tiếp từ upstream, không snapshot trong repo.
-- Sync skills Superpowers chỉ copy skill mới, không ghi đè skill đã có.
 - Pin `opencode-ai@1` (goal-plugin chỉ hỗ trợ opencode `<2`).
 
 ### Removed
 
+- Sync skills Superpowers vào skills/ cá nhân + npm install superpowers vô điều kiện
+  (gây shadow: personal > plugin theo thứ tự ưu tiên chính thức; npm local chỉ còn
+  là fallback khi git-spec fetch thất bại).
 - Bỏ thư mục `config/` snapshot (`opencode.json`, `package.json`, `AGENTS.md`,
   karpathy): tránh thối rữa khi upstream update agents/commands/MCP fields.
 - Bỏ quản lý plugin 9Remote trong script (9Remote tự thêm/quản lý; ôm snapshot cũ
@@ -48,6 +58,25 @@ Ngày theo lịch sử commit của repo.
 - Bỏ ghi đè `plugin[]` — nguyên nhân `/goal` gãy mỗi lần chạy installer cũ.
 
 ### Fixed
+
+- Desktop installer rò file temp khi throw giữa chừng → bọc `try/finally` + tên file
+  GUID chống collide khi chạy đồng thời.
+- Crash khi `VersionInfo.FileVersion` null/rỗng (`.Split` trên null) ở check Desktop
+  và verify drift → helper `Get-VersionMajor` null-safe (unknown = cài lại/cảnh báo).
+- Máy 32-bit tải nhầm asset Desktop x64 → fail-fast đầu step (giống bootstrap portable).
+- Prune instructions thu hẹp thành allowlist 7 refs chết đã biết (không prune mọi ref
+  missing) + verify check AGENTS.md/karpathy tồn tại — tôn trọng custom của user.
+- Fallback npm superpowers không check exit code (đổi entry dù cài gãy) → check
+  `$LASTEXITCODE` + xác nhận package tồn tại trước khi swap entry.
+- Dual-entry superpowers (git-spec + local-path cùng tồn tại qua các lần chạy) →
+  merge chuẩn hóa còn 1 entry theo cache-hit.
+- Resolved-config check yêu cầu `debug config` exit 0 trước khi match chuỗi
+  (tránh false pass trên output lỗi).
+
+- Merge prune instruction refs trỏ file không tồn tại (6 skills thuộc module ngoài
+  profile `developer`/`framework-language` bị skip ở target opencode +
+  `CONTRIBUTING.md`), có liệt kê trong output — trước đây opencode warning mỗi lần
+  khởi động vì chúng.
 
 - npm cũ (Node 20/22 LTS) không hiểu flag `--allow-scripts` làm gãy bước cài
   opencode-ai → tự fallback cài kiểu tương thích, gãy tiếp mới exit 1.

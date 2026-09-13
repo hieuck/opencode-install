@@ -48,6 +48,13 @@ function Write-Warn {
     Write-Host "  [!] $Msg" -ForegroundColor Yellow
 }
 
+function Get-VersionMajor {
+    # Lấy major an toàn (VersionInfo.FileVersion có thể null/rỗng trên một số build).
+    param([string]$Ver)
+    if ([string]::IsNullOrEmpty($Ver)) { return "" }
+    return $Ver.Split('.')[0]
+}
+
 # -----------------------------------------------------------
 # 0. KIỂM TRA & CÀI ĐẶT MÔI TRƯỜNG YÊU CẦU
 # -----------------------------------------------------------
@@ -217,11 +224,12 @@ if (-not $SkipUninstall) {
         }
     }
 
-    # Xóa cache gói goal-plugin cũ: theo README chính thức, cache stale khiến bản bug cũ
-    # vẫn chạy mãi dù đã bump pin. Chỉ xóa goal-plugin*, không đụng cache khác.
-    Write-Info "Xóa package cache cũ của opencode-goal-plugin (tránh chạy bản stale)..."
+    # Xóa package cache cũ của plugin pin-version: cache stale khiến bản bug cũ vẫn chạy
+    # mãi (README goal-plugin), và restart có thể không pick commit superpowers mới
+    # (README superpowers: clear package cache để update). Chỉ xóa 2 họ này.
+    Write-Info "Xóa package cache cũ của goal-plugin + superpowers (tránh chạy bản stale)..."
     Get-ChildItem "$env:USERPROFILE\.cache\opencode\packages" -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like "opencode-goal-plugin*" } |
+        Where-Object { ($_.Name -like "opencode-goal-plugin*") -or ($_.Name -like "superpowers@git+https_*") } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Write-Success "Đã gỡ bỏ sạch sẽ toàn bộ OpenCode cũ."
 } else {
@@ -282,19 +290,65 @@ Write-Step "5. Cài đặt ECC - Everything Claude Code (affaan-m/ECC)"
 Write-Success "ECC Developer Profile (kèm hooks) đã được cài đặt vào OpenCode."
 
 # -----------------------------------------------------------
-# 5. ĐĂNG KÝ SUPERPOWERS VỚI OPENCODE
+# 5. ĐĂNG KÝ SUPERPOWERS (đúng README chính thức: chỉ cần entry plugin[])
 # -----------------------------------------------------------
 Write-Step "6. Đăng ký Superpowers (obra/superpowers) với OpenCode"
 
-# Chạy TRƯỚC khi ghi config chuẩn: CLI có thể tự tạo/sửa opencode.json,
-# bản canonical ở bước 7 sẽ ghi đè nên kết quả cuối luôn deterministic.
+# Cách chính thức (.opencode/INSTALL.md): thêm git-spec vào plugin[], opencode tự fetch
+# qua Bun rồi đăng ký skills qua config hook. KHÔNG npm install, KHÔNG copy skills vào
+# skills/ cá nhân — copy sẽ thành "personal skills" và SHADOW (đè) bản mới của plugin,
+# vì thứ tự ưu tiên chính thức là: project > personal > superpowers.
 & opencode plugin superpowers@git+https://github.com/obra/superpowers.git -g
-Write-Success "Superpowers đã được đăng ký (node_modules + skills sync ở bước 7)."
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Đăng ký plugin superpowers thất bại (exit $LASTEXITCODE)."
+    exit 1
+}
+
+# Warm để opencode fetch plugin rồi kiểm tra cache: một số bản Windows bị lỗi upstream
+# (Bun không thấy git.exe) khiến git-spec fetch thất bại — README chính thức có mục
+# riêng (Windows install issues).
+& opencode debug config 2>&1 | Out-Null
+$spCacheHit = Get-ChildItem "$env:USERPROFILE\.cache\opencode\packages" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "superpowers@git+https_*" }
+if ($spCacheHit) {
+    Write-Success "Superpowers resolve qua git-spec (đường chính thức)."
+} else {
+    # Fallback đúng README chính thức: npm local + entry local path (thay git-spec).
+    Write-Warn "git-spec fetch thất bại → fallback npm local theo README chính thức..."
+    Push-Location $configDir
+    try {
+        & npm install superpowers@git+https://github.com/obra/superpowers.git --silent
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "npm install superpowers thất bại (exit $LASTEXITCODE)."
+            exit 1
+        }
+    } finally {
+        Pop-Location
+    }
+    if (-not (Test-Path "$configDir\node_modules\superpowers\package.json")) {
+        Write-Error "npm báo xong nhưng không thấy package superpowers local."
+        exit 1
+    }
+    if (-not (Test-Path "$configDir\opencode.json")) {
+        Write-Error "Thiếu opencode.json sau khi đăng ký plugin — opencode plugin -g không ghi config như kỳ vọng."
+        exit 1
+    }
+    $cfg6 = Get-Content "$configDir\opencode.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+    $swapped = @(@($cfg6.plugin | Where-Object { $_ -ne "superpowers@git+https://github.com/obra/superpowers.git" }) + "~/.config/opencode/node_modules/superpowers")
+    $cfg6 | Add-Member -MemberType NoteProperty -Name "plugin" -Value $swapped -Force
+    [System.IO.File]::WriteAllText("$configDir\opencode.json", ($cfg6 | ConvertTo-Json -Depth 20), [System.Text.Encoding]::UTF8)
+    Write-Success "Superpowers dùng entry local path (fallback Windows)."
+}
 
 # -----------------------------------------------------------
 # 6. CÀI OPENCODE DESKTOP (bản win per-user từ GitHub releases, không cần admin)
 # -----------------------------------------------------------
 Write-Step "7. Cài đặt OpenCode Desktop"
+
+if (-not [Environment]::Is64BitOperatingSystem) {
+    Write-Error "OpenCode Desktop chỉ có bản 64-bit (x64/arm64) — máy 32-bit không hỗ trợ."
+    exit 1
+}
 
 # Pin Desktop theo CLI major v1 — bump tay theo https://github.com/anomalyco/opencode/releases
 $DesktopVersion = "v1.18.30"
@@ -303,24 +357,31 @@ $desktopArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "
 $needDesktop = $true
 if ((Test-Path $desktopExe) -and $SkipUninstall) {
     $installedDeskVer = (Get-Item $desktopExe).VersionInfo.FileVersion
-    if ($installedDeskVer.Split('.')[0] -eq $DesktopVersion.TrimStart('v').Split('.')[0]) {
+    $installedMajor = Get-VersionMajor $installedDeskVer
+    $pinMajor = Get-VersionMajor $DesktopVersion.TrimStart('v')
+    if ($installedMajor -ne "" -and $installedMajor -eq $pinMajor) {
         Write-Info "OpenCode Desktop $installedDeskVer đã có sẵn, bỏ qua tải lại."
         $needDesktop = $false
+    } elseif ($installedMajor -eq "") {
+        Write-Warn "Không đọc được version Desktop đã cài → cài lại bản pin $DesktopVersion cho chắc."
     } else {
         Write-Warn "Desktop $installedDeskVer lệch major với pin $DesktopVersion → cài lại cho đồng bộ CLI."
     }
 }
 if ($needDesktop) {
     $desktopUrl = "https://github.com/anomalyco/opencode/releases/download/$DesktopVersion/opencode-desktop-win-$desktopArch.exe"
-    $desktopInstaller = Join-Path ([IO.Path]::GetTempPath()) "opencode-desktop-setup.exe"
-    Write-Info "Tải OpenCode Desktop $DesktopVersion ($desktopArch, ~120MB)..."
-    Invoke-WebRequest -Uri $desktopUrl -OutFile $desktopInstaller -UseBasicParsing
-    Write-Info "Cài silent (per-user, không cần admin)..."
-    $deskProc = Start-Process -FilePath $desktopInstaller -ArgumentList "/S" -Wait -PassThru
-    Remove-Item $desktopInstaller -Force -ErrorAction SilentlyContinue
-    if ($deskProc.ExitCode -ne 0) {
-        Write-Error "Cài OpenCode Desktop thất bại (exit $($deskProc.ExitCode))."
-        exit 1
+    $desktopInstaller = Join-Path ([IO.Path]::GetTempPath()) ("opencode-desktop-setup-" + [Guid]::NewGuid().ToString("N") + ".exe")
+    try {
+        Write-Info "Tải OpenCode Desktop $DesktopVersion ($desktopArch, ~120MB)..."
+        Invoke-WebRequest -Uri $desktopUrl -OutFile $desktopInstaller -UseBasicParsing
+        Write-Info "Cài silent (per-user, không cần admin)..."
+        $deskProc = Start-Process -FilePath $desktopInstaller -ArgumentList "/S" -Wait -PassThru
+        if ($deskProc.ExitCode -ne 0) {
+            Write-Error "Cài OpenCode Desktop thất bại (exit $($deskProc.ExitCode))."
+            exit 1
+        }
+    } finally {
+        Remove-Item $desktopInstaller -Force -ErrorAction SilentlyContinue
     }
     if (-not (Test-Path $desktopExe)) {
         Write-Error "Cài xong nhưng không thấy OpenCode.exe tại $desktopExe."
@@ -342,7 +403,6 @@ Write-Step "8. Áp delta cấu hình chuẩn vào $configDir"
 
 $requiredPlugins = @(
     "./plugins",
-    "superpowers@git+https://github.com/obra/superpowers.git",
     "opencode-goal-plugin@0.10.0"
 )
 $requiredSkillPaths = @("./skills", "~/.config/opencode/skills")
@@ -372,13 +432,33 @@ if (-not (Test-Path "$configDir\opencode.json")) {
 }
 $cfg = Get-Content "$configDir\opencode.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 
-# 1. Merge plugin array: giữ entry lạ, đảm bảo đủ 3 entry bắt buộc.
+# 1. Merge plugin array: giữ entry lạ, đảm bảo đủ entry bắt buộc (superpowers riêng ở dưới).
 $plugins = [System.Collections.Generic.List[string]]::new()
 foreach ($p in @($cfg.plugin)) {
     if ($p -and -not $plugins.Contains($p)) { $plugins.Add($p) }
 }
 foreach ($p in $requiredPlugins) {
     if (-not $plugins.Contains($p)) { $plugins.Add($p) }
+}
+# Superpowers: chấp nhận mọi entry (git-spec chính / local-path fallback Windows).
+# Chuẩn hóa dual-entry (cả 2 cùng tồn tại qua các lần chạy): cache-hit thì giữ git-spec,
+# không thì giữ local-path. Thiếu cả 2 mới thêm git-spec. KHÔNG copy skills.
+$spGit = "superpowers@git+https://github.com/obra/superpowers.git"
+$spLocal = "~/.config/opencode/node_modules/superpowers"
+$hasSpGit = $plugins.Contains($spGit)
+$hasSpLocal = $plugins.Contains($spLocal)
+if ($hasSpGit -and $hasSpLocal) {
+    $spCacheNow = Get-ChildItem "$env:USERPROFILE\.cache\opencode\packages" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "superpowers@git+https_*" }
+    if ($spCacheNow) {
+        $null = $plugins.Remove($spLocal)
+        Write-Info "Dọn entry superpowers local-path thừa (git-spec resolve tốt)."
+    } else {
+        $null = $plugins.Remove($spGit)
+        Write-Info "Dọn entry superpowers git-spec thừa (đang dùng fallback local)."
+    }
+} elseif (-not ($hasSpGit -or $hasSpLocal)) {
+    $plugins.Add($spGit)
 }
 # Add-Member -Force (thay vì gán trực tiếp): object từ ConvertFrom-Json không cho
 # gán property chưa tồn tại — gán trực tiếp sẽ throw khi file gốc thiếu key này.
@@ -406,6 +486,26 @@ if ($cfg.instructions) {
 }
     if (-not $instList.Contains("AGENTS.md")) { $instList.Insert(0, "AGENTS.md") }
     if (-not $instList.Contains("karpathy-guidelines.md")) { $instList.Insert(1, "karpathy-guidelines.md") }
+    # Prune đúng 7 refs chết ĐÃ BIẾT (skills thuộc module ngoài profile developer như
+    # security, hoặc bị skip ở target opencode như framework-language; CONTRIBUTING.md):
+    # opencode warning mỗi lần khởi động vì chúng. Allowlist (không prune mọi ref missing)
+    # để tôn trọng custom của user — ref lạ dù missing cũng được giữ nguyên.
+    $knownDeadInst = @(
+        "CONTRIBUTING.md",
+        "skills/security-review/SKILL.md",
+        "skills/coding-standards/SKILL.md",
+        "skills/frontend-patterns/SKILL.md",
+        "skills/frontend-slides/SKILL.md",
+        "skills/backend-patterns/SKILL.md",
+        "skills/api-design/SKILL.md"
+    )
+    $pruned = @($instList | Where-Object {
+        ($knownDeadInst -contains $_) -and (-not (Test-Path (Join-Path $configDir ($_ -replace "/", "\"))))
+    })
+    if ($pruned.Count -gt 0) {
+        Write-Warn "Bỏ instruction refs trỏ file không tồn tại: $($pruned -join ', ')"
+        foreach ($dead in $pruned) { $null = $instList.Remove($dead) }
+    }
     $cfg | Add-Member -MemberType NoteProperty -Name "instructions" -Value $instList.ToArray() -Force
 
 # 4. Đảm bảo codegraph MCP được đăng ký
@@ -431,34 +531,15 @@ $cfg.command | Add-Member -MemberType NoteProperty -Name "goal" -Value ([PSCusto
 [System.IO.File]::WriteAllText("$configDir\opencode.json", ($cfg | ConvertTo-Json -Depth 20), [System.Text.Encoding]::UTF8)
 Write-Success "Đã merge opencode.json (giữ agents/commands của installer, thêm delta goal)."
 
-# Cài dependencies khai báo trong package.json (gồm opencode-goal-plugin + superpowers).
+# Cài dependencies khai báo trong package.json (opencode-goal-plugin + deps của ECC).
+# Superpowers KHÔNG cài ở đây: đường chính thức là git-spec do opencode tự fetch;
+# npm local chỉ dùng trong fallback Windows ở bước 6 (tự ghi dep vào package.json).
 Push-Location $configDir
 try {
     & npm install --silent
     Write-Success "Dependencies của config đã cài xong."
 } finally {
     Pop-Location
-}
-
-# Đồng bộ skills Superpowers còn thiếu (CHỈ copy skill chưa tồn tại để không ghi đè ECC/custom).
-$spSkills = "$configDir\node_modules\superpowers\skills"
-$destSkills = "$configDir\skills"
-if (Test-Path $spSkills) {
-    if (-not (Test-Path $destSkills)) {
-        New-Item -ItemType Directory -Path $destSkills -Force | Out-Null
-    }
-    $skipped = @()
-    $copied = @()
-    Get-ChildItem $spSkills -Directory | ForEach-Object {
-        $dest = Join-Path $destSkills $_.Name
-        if (Test-Path $dest) { $skipped += $_.Name }
-        else {
-            Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force
-            $copied += $_.Name
-        }
-    }
-    if ($copied.Count -gt 0) { Write-Success "Đã thêm skill mới của Superpowers: $($copied -join ', ')." }
-    if ($skipped.Count -gt 0) { Write-Info "Giữ nguyên skill đã tồn tại (không ghi đè): $($skipped -join ', ')." }
 }
 
 # Skill karpathy-guidelines từ file chuẩn (nội dung đã fix đúng markdown fences).
@@ -497,6 +578,13 @@ if ($cfgCheck.command.goal -and $goalAgent -and $cfgCheck.agent.PSObject.Propert
     Write-Warn "Thiếu command /goal trong command{}."
     $failures += "thiếu command /goal"
 }
+# AGENTS.md + karpathy là refs vừa ensure ở merge: missing nghĩa là bước trước gãy ngầm.
+foreach ($reqFile in @("AGENTS.md", "karpathy-guidelines.md")) {
+    if (-not (Test-Path (Join-Path $configDir $reqFile))) {
+        Write-Warn "Thiếu $reqFile (instructions trỏ vào hư không)."
+        $failures += "thiếu $reqFile"
+    }
+}
 if (Test-Path "$configDir\node_modules\opencode-goal-plugin\package.json") {
     Write-Success "Package opencode-goal-plugin đã cài trong node_modules."
 } else {
@@ -524,8 +612,10 @@ if (Test-Path "$configDir\node_modules\opencode-goal-plugin\scripts\verify.mjs")
 # Đối chiếu cuối: resolved config thực tế opencode load phải chứa đủ các plugin.
 try {
     $resolved = & opencode debug config 2>&1 | Out-String
-    if ($resolved -match "opencode-goal-plugin" -and $resolved -match "ecc-hooks") {
-        Write-Success "Resolved config chứa đủ goal-plugin và ECC hooks."
+    # $LASTEXITCODE trước: match chuỗi trên output lỗi (VD "failed to fetch X") là false pass.
+    $resolvedOk = ($LASTEXITCODE -eq 0)
+    if ($resolvedOk -and $resolved -match "opencode-goal-plugin" -and $resolved -match "superpowers" -and $resolved -match "ecc-hooks") {
+        Write-Success "Resolved config chứa đủ goal-plugin, superpowers và ECC hooks."
     } else {
         Write-Warn "Resolved config thiếu mảnh ghép — khởi động lại opencode rồi chạy 'opencode debug config' để đối chiếu."
         $failures += "resolved config thiếu plugin"
@@ -536,11 +626,17 @@ try {
 
 $desktopExeCheck = "$env:LOCALAPPDATA\Programs\@opencode-aidesktop\OpenCode.exe"
 if (Test-Path $desktopExeCheck) {
-    $deskFileVer = (Get-Item $desktopExeCheck).VersionInfo.FileVersion
+$deskFileVer = (Get-Item $desktopExeCheck).VersionInfo.FileVersion
+$deskFileMajor = Get-VersionMajor $deskFileVer
+$deskPinMajor = Get-VersionMajor $DesktopVersion.TrimStart('v')
+if ($deskFileMajor -eq "") {
+    Write-Warn "Đọc được OpenCode Desktop nhưng không rõ version — bỏ qua check lệch major."
+} else {
     Write-Success "OpenCode Desktop đã cài: phiên bản $deskFileVer"
-    if ($deskFileVer.Split('.')[0] -ne $DesktopVersion.TrimStart('v').Split('.')[0]) {
+    if ($deskFileMajor -ne $deskPinMajor) {
         Write-Warn "Desktop ($deskFileVer) lệch major với pin ($DesktopVersion) — /goal có thể gãy trên Desktop."
     }
+}
 } else {
     Write-Warn "Thiếu OpenCode Desktop."
     $failures += "thiếu OpenCode Desktop"
@@ -558,6 +654,20 @@ if (Test-Path $ToolsDir) {
     } else {
         Write-Info "Cache portable ($toolsMB MB) đang dùng ($($toolsInUse -join ', ')) — giữ lại để chạy."
     }
+}
+
+# Cảnh báo clones superpowers cũ trong skills/ cá nhân (do bản installer cũ copy vào):
+# personal shadow plugin theo thứ tự ưu tiên chính thức — xóa tay nếu không custom gì.
+# Không tự xóa (tôn trọng update-mode: có thể là custom của user).
+$spCloneNames = @("brainstorming", "dispatching-parallel-agents", "executing-plans", "finishing-a-development-branch", "receiving-code-review", "requesting-code-review", "subagent-driven-development", "systematic-debugging", "test-driven-development", "using-git-worktrees", "using-superpowers", "verification-before-completion", "writing-plans", "writing-skills")
+# Ưu tiên tên thật từ package local khi có (chống rot khi upstream thêm/bớt skill).
+$spPkgSkillsDir = "$configDir\node_modules\superpowers\skills"
+if (Test-Path $spPkgSkillsDir) {
+    $spCloneNames = @(Get-ChildItem $spPkgSkillsDir -Directory | Select-Object -ExpandProperty Name)
+}
+$spClones = @($spCloneNames | Where-Object { Test-Path (Join-Path "$configDir\skills" $_) })
+if ($spClones.Count -gt 0) {
+    Write-Warn "skills/ cá nhân chứa bản copy superpowers cũ ($($spClones -join ', ')) — chúng shadow bản mới của plugin. Xóa tay nếu bạn không custom gì trong đó."
 }
 
 $skillCount = (Get-ChildItem "$configDir\skills" -Directory -ErrorAction SilentlyContinue | Measure-Object).Count
