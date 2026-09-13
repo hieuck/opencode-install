@@ -111,6 +111,13 @@ if (-not $SkipUninstall) {
             Write-Info "Đã xóa: $p"
         }
     }
+
+    # Xóa cache gói goal-plugin cũ: theo README chính thức, cache stale khiến bản bug cũ
+    # vẫn chạy mãi dù đã bump pin. Chỉ xóa goal-plugin*, không đụng cache khác.
+    Write-Info "Xóa package cache cũ của opencode-goal-plugin (tránh chạy bản stale)..."
+    Get-ChildItem "$env:USERPROFILE\.cache\opencode\packages" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "opencode-goal-plugin*" } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Write-Success "Đã gỡ bỏ sạch sẽ toàn bộ OpenCode cũ."
 } else {
     Write-Step "2. Chế độ update (-SkipUninstall): giữ nguyên dữ liệu, merge config"
@@ -344,6 +351,23 @@ if (Test-Path "$configDir\node_modules\opencode-goal-plugin\package.json") {
     $failures += "node_modules thiếu opencode-goal-plugin"
 }
 
+# Verify chính chủ của plugin author (8 checks: hooks, /goal status/set, cache không cũ,
+# không gọi model). Đây là kiểm chứng mạnh nhất, hơn mọi check file tồn tại ở trên.
+if (Test-Path "$configDir\node_modules\opencode-goal-plugin\scripts\verify.mjs") {
+    Write-Info "Chạy bộ verify chính chủ của opencode-goal-plugin..."
+    $goalVerifyOut = & node "$configDir\node_modules\opencode-goal-plugin\scripts\verify.mjs" 2>&1 | Out-String
+    Write-Info $goalVerifyOut.Trim()
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Verify chính chủ opencode-goal-plugin: PASS."
+    } else {
+        Write-Warn "Verify chính chủ opencode-goal-plugin: FAIL (exit $LASTEXITCODE)."
+        $failures += "verify chính chủ opencode-goal-plugin FAIL"
+    }
+} else {
+    Write-Warn "Thiếu script verify của opencode-goal-plugin."
+    $failures += "thiếu script verify của opencode-goal-plugin"
+}
+
 # Đối chiếu cuối: resolved config thực tế opencode load phải chứa đủ các plugin.
 try {
     $resolved = & opencode debug config 2>&1 | Out-String
@@ -362,6 +386,8 @@ Write-Host "`n[+] Tổng số kỹ năng (Skills) đã cài đặt: $skillCount"
 Write-Host "    - Superpowers (TDD, Brainstorming, Subagents, v.v.)" -ForegroundColor Gray
 Write-Host "    - ECC Developer (Database, Quality, Memory, v.v.)" -ForegroundColor Gray
 Write-Host "    - Karpathy Guidelines (Surgical changes, Simplicity, v.v.)" -ForegroundColor Gray
+
+Write-Host "`n[!] Khởi động lại OpenCode để nhận config mới (bắt buộc sau -SkipUninstall, theo README chính thức của goal-plugin)." -ForegroundColor Yellow
 
 if ($failures.Count -gt 0) {
     Write-Host "`n========================================================" -ForegroundColor Red

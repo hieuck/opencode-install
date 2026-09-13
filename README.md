@@ -60,7 +60,10 @@ Nhấp đúp `setup-opencode.bat` để fresh-install toàn bộ.
 ## Ghi chú
 
 - `/goal` cần đồng thời 3 thứ: entry trong `plugin[]`, dep trong `package.json`,
-  và block `command.goal` trong config — thiếu 1 là gãy. Step verify check cả 3.
+  và block `command.goal` trong config — thiếu 1 là gãy. Step verify check cả 3
+  rồi chạy tiếp **bộ verify 8-check chính chủ** của plugin (`scripts/verify.mjs`).
+- Fresh-install xóa cả package cache cũ của goal-plugin (`~/.cache/opencode/packages`),
+  vì theo README chính thức cache stale khiến bản bug cũ chạy mãi dù đã bump pin.
 - Khi goal-plugin hỗ trợ opencode v2 (hoặc bỏ goal-plugin), đổi `opencode-ai@1`
   thành `opencode-ai@latest` trong script.
 - Xem lịch sử thay đổi trong [CHANGELOG.md](CHANGELOG.md).

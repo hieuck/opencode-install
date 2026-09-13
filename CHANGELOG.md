@@ -10,6 +10,10 @@ Ngày theo lịch sử commit của repo.
 - Step verify fail loudly: thiếu mảnh ghép nào (plugin, `/goal`, agent đích,
   `node_modules`) là exit 1 kèm danh sách đỏ, thay vì báo thành công giả.
 - Đối chiếu `opencode debug config` cuối cài đặt để xác nhận plugin thực tế được load.
+- Chạy bộ verify 8-check chính chủ của goal-plugin (`scripts/verify.mjs`) trong step verify.
+- Fresh-install xóa package cache cũ của goal-plugin (tránh chạy bản stale theo
+  khuyến cáo upgrading của README chính thức).
+- Nhắc khởi động lại OpenCode cuối cài đặt (bắt buộc sau `-SkipUninstall`).
 - Kiểm tra môi trường (Node.js, npm, git) fail-fast ngay đầu script.
 - Cài CodeGraph có điều kiện: dùng bản standalone nếu có, tránh trùng bản npm.
 
